@@ -15,7 +15,7 @@ LENS_FILE="$CONF_DIR/lens"
 ENDPOINT_FILE="$CONF_DIR/endpoint"
 SINK=/dev/video42
 SVC=tethercam.service
-VERSION=0.1.0
+VERSION=0.1.1
 
 have() { command -v "$1" >/dev/null 2>&1; }
 svc_active() { systemctl --user is-active --quiet "$SVC" 2>/dev/null; }
@@ -93,7 +93,7 @@ doctor() {
   have ffmpeg; chk "ffmpeg installed" $?
   have pactl; chk "pactl (pipewire-pulse) installed" $?
   have pw-link; chk "pw-link (pipewire) installed" $?
-  [ -x "$HOME/.local/share/scrcpy-4.1/scrcpy" ]; chk "scrcpy present" $?
+  [ -x "${TETHERCAM_SCRCPY:-$HOME/.local/share/scrcpy-4.1/scrcpy}" ]; chk "scrcpy present" $?
   lsmod 2>/dev/null | grep '^v4l2loopback' >/dev/null; chk "v4l2loopback loaded" $?
   [ -e "$SINK" ]; chk "$SINK present" $?
   [ "$(cat /sys/class/video4linux/video42/name 2>/dev/null)" = TetherCam ]; \
@@ -132,9 +132,16 @@ doctor() {
 
 ui() {
   local st lens ph cam on_front on_back on_auto pick
+  ph=$(serial)
+  # Opening the panel is also the "start" button: if a phone is attached and
+  # nothing is running, bring the stream up.
+  if [ -n "$ph" ] && ! svc_active; then
+    systemctl --user start "$SVC" 2>/dev/null || true
+    sleep 1
+  fi
   st=$(svc_active && echo "live" || echo "off")
   lens=$(cat "$LENS_FILE" 2>/dev/null || echo front)
-  ph=$(serial); [ -n "$ph" ] || ph="no phone"
+  [ -n "$ph" ] || ph="no phone"
   cam=$([ -e "$SINK" ] && echo "$SINK ready" || echo "$SINK missing")
   case "$lens" in
     back) on_front=FALSE; on_back=TRUE; on_auto=FALSE ;;

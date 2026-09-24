@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Version consistency
+        run: |
+          v="$(tr -d ' \n' < VERSION)"
+          grep -q "VERSION=$v" scripts/tethercam \
+            || { echo "scripts/tethercam VERSION != $v"; exit 1; }
       - name: Shellcheck
         run: |
           sudo apt-get update -qq

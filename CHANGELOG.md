@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 - 2026-09-23
+
+- Fix: the `.deb` now downloads scrcpy on first run. In 0.1.0 a package-only
+  install had no scrcpy and the service could not start.
+- README corrected to match the real user experience.
+
 ## 0.1.0 - 2026-09-23
 
 First public alpha.
