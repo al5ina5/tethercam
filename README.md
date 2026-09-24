@@ -1,34 +1,46 @@
 # TetherCam
 
-**Plug in any Android. Get a webcam and a microphone.**
+**Turn any Android phone into a webcam and microphone for your Linux PC.**
 
-One-command Linux webcam + mic from any Android, over USB or WiFi. No phone
-app, no account, no cloud. Plug a Droid in and it appears as:
+No app to install on the phone. No account. No cloud. No watermark. Plug in a
+USB cable (or pair over WiFi), pick **TetherCam** in OBS, Discord, Zoom, Meet,
+Teams or any browser, and you are live.
 
-* a standard webcam - `TetherCam` (`/dev/video42`)
-* a standard microphone - `TetherCam`
+Your phone shows up as a completely standard webcam and microphone, so every
+app that already works with a webcam just works with your phone.
 
-for OBS, Discord, Meet, Zoom. Unplug and they are gone.
+[![release](https://img.shields.io/github/v/release/al5ina5/tethercam)](https://github.com/al5ina5/tethercam/releases)
+[![license](https://img.shields.io/github/license/al5ina5/tethercam)](LICENSE)
+![platform](https://img.shields.io/badge/platform-Linux-blue)
 
-Built on official [scrcpy](https://github.com/Genymobile/scrcpy) (see NOTICE).
-MIT licensed.
+---
 
-## Status: working alpha
+## Why TetherCam
 
-Proven on SM-G990U (Android 15) and SM-G781U (Android 13). The app is two
-buttons: **Front | Back**. Switching lenses never interrupts the microphone.
-Mic is always on - no toggle, no beta label.
+- **Nothing to install on the phone.** No companion app, no Play Store, no
+  root, no sign-up. USB debugging is the only switch you flip.
+- **Instant install.** A `.deb` for Mint and Ubuntu (double-click), or one
+  `curl` line. No build step, no toolchain.
+- **Zero configuration.** Plug in, run `tethercam`, choose "TetherCam". That is
+  the entire setup.
+- **Camera *and* microphone.** Both arrive as normal devices, not a special
+  protocol your app has to understand.
+- **Switch front/back instantly** without dropping the microphone.
+- **USB or WiFi.** Pull the cable and it fails over to WiFi on its own; USB
+  wins whenever it is plugged in.
+- **Works everywhere a webcam works** - OBS, Discord, Zoom, Google Meet,
+  Microsoft Teams, Slack, Jitsi, browsers.
+- **Free and open source** (MIT). No account, no telemetry, no cloud, no
+  watermark, no time limit.
 
-## Requirements
-
-Linux with PipeWire (Mint/Ubuntu), `adb`, `ffmpeg`, `zenity`, `v4l2loopback`.
-`install.sh` checks all of this and tells you exactly what is missing.
+> Replacing DroidCam, Iriun or a USB capture card? TetherCam is the
+> zero-app, zero-config option for Linux.
 
 ## Install
 
 **Linux Mint / Ubuntu - `.deb` (double-click).** Download from
-[Releases](https://github.com/al5ina5/tethercam/releases) and double-click the
-`.deb`, or:
+[Releases](https://github.com/al5ina5/tethercam/releases), double-click the
+`.deb`, and install. Or:
 
 ```bash
 sudo apt install ./tethercam_0.1.0_amd64.deb
@@ -46,8 +58,40 @@ curl -fsSL https://raw.githubusercontent.com/al5ina5/tethercam/main/packaging/in
 ./install.sh
 ```
 
-Then plug in a phone (USB debugging authorized) and run `tethercam`.
-In OBS: camera `TetherCam`, mic `TetherCam`.
+## Use it
+
+1. On the phone: **Settings -> Developer options -> USB debugging -> on**.
+2. Plug the phone in and accept the prompt on the phone.
+3. On the computer, run `tethercam`.
+4. In your app, choose **TetherCam** for the camera and **TetherCam** for the
+   microphone.
+
+That is the whole setup. There is no phone app to pair, no server to run, and
+no configuration file to edit.
+
+## Works with
+
+OBS Studio, Discord, Zoom, Google Meet, Microsoft Teams, Slack, Jitsi, Firefox
+and Chromium - anything that can see a webcam and a microphone.
+
+## Camera and microphone
+
+| | Device | Notes |
+|---|---|---|
+| Camera | `TetherCam` (`/dev/video42`) | 1280x720 @ 30fps by default |
+| Microphone | `TetherCam` | live phone mic, always on |
+
+The mic needs a small helper sink under the hood (`TetherCam Sink`). Some audio
+apps (pavucontrol, Cinnamon Sound, OBS's *Desktop Audio* dropdown) will list
+it - it is never the default and the phone mic never routes through it, it is
+plumbing only.
+
+## USB and WiFi
+
+- **USB** is the default and the lowest-latency option. Plug in and go.
+- **WiFi:** run `tethercam pair` once while on USB. The phone pairs over the
+  network and the endpoint is saved. Unplug whenever - the daemon fails over to
+  WiFi on its own, and switches back to USB the moment a cable appears.
 
 ## Commands
 
@@ -62,26 +106,51 @@ tethercam snapshot [path]    save a frame
 tethercam version            print the version
 ```
 
-## Wireless (same pipeline)
+## Requirements
 
-`tethercam pair` while on USB: the phone pairs over WiFi (`adb tcpip`, endpoint
-saved). Unplug whenever - the daemon fails over to WiFi on its own. USB wins
-whenever a cable is present.
+Linux with **PipeWire** (Linux Mint 22 / Ubuntu 24.04 and newer), `adb`,
+`ffmpeg`, `zenity` and the `v4l2loopback` kernel module. `install.sh` checks
+all of this and tells you exactly what is missing.
 
-## Devices
+## Troubleshooting
 
-Two user-facing devices: camera `TetherCam` and mic `TetherCam`. The mic needs
-a small helper sink under the hood (`TetherCam Sink`); some audio apps
-(pavucontrol, Cinnamon Sound, OBS's *Desktop Audio* dropdown) still list it.
-It is never the default, and the phone mic never routes through it - it is
-plumbing only.
+- **The app does not list `TetherCam`?** Run `tethercam doctor` - it checks the
+  camera node, the microphone, the routing and the service in one shot.
+- **Phone not detected?** Make sure USB debugging is on and you accepted the
+  prompt on the phone. `adb devices` should list it.
+- **Black video / no frames?** Some phones need the screen unlocked once. Try
+  `tethercam back` or `tethercam front` to re-init the camera.
+- **Mic silent?** In OBS, set *Desktop Audio* to your real output and use
+  **TetherCam** for *Mic/Aux*.
 
-## Layout
+## How it works
+
+TetherCam drives the official [scrcpy](https://github.com/Genymobile/scrcpy)
+client from your computer - nothing runs on the phone. The camera stream is
+written to a `v4l2loopback` device (`/dev/video42`, "TetherCam") and the mic is
+exposed as a PipeWire source ("TetherCam"). Because both are standard system
+devices, any app can use them.
+
+## Status
+
+**0.1.0 alpha.** Proven on SM-G990U (Android 15) and SM-G781U (Android 13).
+The camera and microphone are supervised independently, so switching lenses
+never drops the mic, and the mic routing is re-asserted continuously so it can
+never leak into Desktop Audio.
+
+## Development
+
+```bash
+packaging/deb/build-deb.sh   # build the .deb into dist/
+bash tests/test-routing.sh   # regression tests (phone checks skip if unplugged)
+```
+
+Layout:
 
 * `scripts/tethercam` - the CLI and control panel (one entry point)
 * `scripts/tethercam-daemon` - the supervisor for camera + mic
 * `tests/test-routing.sh` - regression tests
-* `packaging/` - udev, modprobe, systemd, desktop entry
+* `packaging/` - deb build, udev, modprobe, systemd, desktop entry
 * `app/` - cross-platform GUI, not part of the Linux install yet
 
 ## Uninstall
@@ -89,3 +158,8 @@ plumbing only.
 ```bash
 ./uninstall.sh
 ```
+
+## License
+
+MIT - see [LICENSE](LICENSE). Bundles no phone code; scrcpy is fetched at
+install time and used at runtime (see [NOTICE](NOTICE)).
