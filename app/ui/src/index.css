@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* TetherCam brand tokens - tweak freely, this file is the design system */
+@theme {
+  --color-paper: #f6f7f9;
+  --color-ink: #1b1e24;
+  --color-sub: #5a6068;
+  --color-cable: #2f7cff;
+  --color-go: #2fa84f;
+  --color-idle: #8a8f98;
+  --color-stop: #e5484d;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}

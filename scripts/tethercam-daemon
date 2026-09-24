@@ -1,0 +1,234 @@
+#!/bin/bash
+# TetherCam daemon: one supervisor for the phone camera (-> /dev/video42
+# "TetherCam") and the phone mic (-> a "TetherCam" source).
+#
+# Camera and mic are supervised independently: switching lenses restarts only
+# the camera, so the mic never drops. Mic routing is re-asserted every loop, so
+# the phone mic can never leak into the default (Desktop Audio) sink.
+#
+# Strict-ish mode: we want every unexpected failure visible, but `set -e` is
+# wrong for a supervisor loop (one transient failure would kill the service),
+# so failures are handled explicitly and logged instead.
+set -uo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tethercam"
+LENS_FILE="$CONF_DIR/lens"
+ENDPOINT_FILE="$CONF_DIR/endpoint"
+SCRCPY="${TETHERCAM_SCRCPY:-$HOME/.local/share/scrcpy-4.1/scrcpy}"
+SINK_VIDEO="${TETHERCAM_VIDEO:-/dev/video42}"
+MIC_SINK=TetherSink
+MIC_SRC=TetherMic
+MIC_LABEL=TetherCam
+MAX_BUFFER=200
+
+VIDEO_PID=""
+AUDIO_PID=""
+
+log() { printf '[tethercam] %s\n' "$*" >&2; }
+
+cleanup() {
+  trap - EXIT INT TERM
+  stop_video
+  stop_audio
+}
+trap cleanup EXIT INT TERM
+
+alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+
+# --- adb ---------------------------------------------------------------------
+find_serial() {
+  local s ep
+  s=$(adb devices 2>/dev/null | awk '$2=="device" && $1 !~ /:/{print $1; exit}')
+  if [ -n "$s" ]; then printf '%s' "$s"; return 0; fi
+  ep=$(cat "$ENDPOINT_FILE" 2>/dev/null || true)
+  [ -n "$ep" ] || return 1
+  s=$(adb devices 2>/dev/null | awk -v e="$ep" '$1==e && $2=="device"{print $1; exit}')
+  if [ -n "$s" ]; then printf '%s' "$s"; return 0; fi
+  adb connect "$ep" >/dev/null 2>&1 || true
+  s=$(adb devices 2>/dev/null | awk -v e="$ep" '$1==e && $2=="device"{print $1; exit}')
+  if [ -n "$s" ]; then printf '%s' "$s"; return 0; fi
+  return 1
+}
+
+# --- mic plumbing ------------------------------------------------------------
+# Idempotent. Devices keep stable names so apps remember the selection; we only
+# recreate them when the display name is stale (e.g. an older install) or when
+# they have gone missing (e.g. PipeWire restarted).
+mic_ready() {
+  pactl list short sinks 2>/dev/null | grep "$MIC_SINK" >/dev/null 2>&1 || return 1
+  [ "$(pactl list sources 2>/dev/null | awk '
+    /Name: TetherMic/ { f=1 }
+    f && /Description:/ { sub(/.*Description: /, ""); print; exit }')" = "$MIC_LABEL" ]
+}
+
+ensure_mic() {
+  mic_ready && return 0
+  pactl list modules 2>/dev/null | awk '
+    /^Module #/ { i=$2 }
+    /Argument:.*Tether(Sink|Mic)/ { gsub(/#/, "", i); print i }' |
+    while read -r m; do pactl unload-module "$m" >/dev/null 2>&1 || true; done
+  pactl load-module module-null-sink sink_name="$MIC_SINK" rate=48000 \
+    sink_properties="device.description='${MIC_LABEL}\ Sink' node.nick='$MIC_LABEL' node.hidden=true" \
+    >/dev/null 2>&1 || true
+  pactl load-module module-remap-source master="$MIC_SINK.monitor" source_name="$MIC_SRC" \
+    source_properties="device.description='$MIC_LABEL' node.nick='$MIC_SRC'" \
+    >/dev/null 2>&1 || true
+}
+
+sink_index() { pactl list short sinks 2>/dev/null | awk -v n="$1" '$2==n{print $1; exit}'; }
+
+# The invariant: the mic scrcpy stream lives on TetherSink and nowhere else.
+# Returns non-zero while no scrcpy stream is present yet.
+route_mic() {
+  local sid want cur
+  sid=$(pactl list sink-inputs 2>/dev/null | awk '
+    /^Sink Input #/ { id=$3 }
+    /node\.name = "scrcpy"/ { gsub(/#/, "", id); found=id }
+    END { if (found) print found }')
+  [ -n "$sid" ] || return 1
+  want=$(sink_index "$MIC_SINK")
+  [ -n "$want" ] || return 1
+  cur=$(pactl list short sink-inputs 2>/dev/null | awk -v s="$sid" '$1==s{print $2}')
+  [ "$cur" = "$want" ] && return 0
+  pactl move-sink-input "$sid" "$MIC_SINK" >/dev/null 2>&1 || true
+  return 0
+}
+
+start_audio() {
+  local serial="$1" i
+  ensure_mic
+  # Clear any stale mic-only scrcpy left by a previous run. Anchored to the
+  # scrcpy path so it can never match the shell that invoked us.
+  pkill -f "^${SCRCPY} .*--audio-source=mic" 2>/dev/null || true
+  ANDROID_SERIAL="$serial" "$SCRCPY" -s "$serial" --no-video --no-window \
+    --audio-source=mic >/dev/null 2>&1 &
+  AUDIO_PID=$!
+  log "mic: scrcpy pid $AUDIO_PID"
+  # Route immediately so the default-sink blip is as short as possible.
+  for i in $(seq 1 40); do
+    route_mic && break
+    sleep 0.25
+  done
+}
+
+stop_audio() {
+  if [ -n "$AUDIO_PID" ]; then
+    kill "$AUDIO_PID" 2>/dev/null || true
+    wait "$AUDIO_PID" 2>/dev/null || true
+  fi
+  AUDIO_PID=""
+}
+
+# --- camera ------------------------------------------------------------------
+pick_id() {
+  local list="$1" want="$2" id="" w order
+  case "$want" in
+    back) order="back front" ;;
+    front) order="front back" ;;
+    *) order="back front" ;;
+  esac
+  for w in $order; do
+    id=$(printf '%s\n' "$list" |
+      grep -o -E -- "--camera-id=[0-9]+[[:space:]]+\($w" | head -1 |
+      grep -o -E '[0-9]+')
+    [ -n "$id" ] && break
+  done
+  [ -n "$id" ] || id=$(printf '%s\n' "$list" |
+    grep -o -E -- '--camera-id=[0-9]+' | head -1 | grep -o -E '[0-9]+')
+  printf '%s' "${id:-0}"
+}
+
+start_video() {
+  local serial="$1" lens="$2" id sdk list wifi=0
+  case "$serial" in *:*) wifi=1 ;; esac
+  sdk=$(adb -s "$serial" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')
+  if [ -n "${sdk:-}" ] && [ "$sdk" -lt 31 ]; then
+    log "Android <12 (SDK $sdk): mirroring screen (no camera source)"
+    ANDROID_SERIAL="$serial" "$SCRCPY" -s "$serial" --v4l2-sink="$SINK_VIDEO" \
+      --no-window --no-video-playback --no-audio-playback --stay-awake \
+      --v4l2-buffer="$MAX_BUFFER" -m1280 >/dev/null 2>&1 &
+    VIDEO_PID=$!
+    return
+  fi
+  list=$("$SCRCPY" -s "$serial" --list-cameras 2>&1)
+  id=$(pick_id "$list" "$lens")
+  log "using --camera-id=$id"
+  if [ "$wifi" = 1 ]; then
+    adb -s "$serial" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+    ANDROID_SERIAL="$serial" "$SCRCPY" -s "$serial" --video-source=camera \
+      --camera-id="$id" --camera-size=1280x720 --camera-fps=30 \
+      --video-codec=h264 --video-bit-rate=1500K \
+      --video-codec-options=i-frame-interval:float=0.5 --v4l2-sink="$SINK_VIDEO" \
+      --no-window --no-video-playback --no-audio-playback --stay-awake \
+      --v4l2-buffer=800 >/dev/null 2>&1 &
+  else
+    ANDROID_SERIAL="$serial" "$SCRCPY" -s "$serial" --video-source=camera \
+      --camera-id="$id" --camera-size=1280x720 --camera-fps=30 \
+      --video-codec-options=i-frame-interval:float=1.0 --v4l2-sink="$SINK_VIDEO" \
+      --no-window --no-video-playback --no-audio-playback --stay-awake \
+      --v4l2-buffer="$MAX_BUFFER" >/dev/null 2>&1 &
+  fi
+  VIDEO_PID=$!
+}
+
+stop_video() {
+  if [ -n "$VIDEO_PID" ]; then
+    kill "$VIDEO_PID" 2>/dev/null || true
+    wait "$VIDEO_PID" 2>/dev/null || true
+  fi
+  VIDEO_PID=""
+}
+
+# --- main --------------------------------------------------------------------
+[ -x "$SCRCPY" ] || { log "scrcpy not found at $SCRCPY - run install.sh"; exit 2; }
+mkdir -p "$CONF_DIR"
+[ -f "$LENS_FILE" ] || printf 'front\n' > "$LENS_FILE"
+
+cur_serial=""
+cur_lens=""
+log "started (video=$SINK_VIDEO, mic=$MIC_LABEL)"
+
+while :; do
+  if ! serial=$(find_serial); then
+    if [ -n "$cur_serial" ]; then
+      log "phone gone"
+      stop_video
+      stop_audio
+      cur_serial=""
+      cur_lens=""
+    fi
+    sleep 2
+    continue
+  fi
+
+  if [ "$serial" != "$cur_serial" ]; then
+    log "phone: $serial"
+    stop_video
+    stop_audio
+    cur_serial="$serial"
+    cur_lens=""
+    start_audio "$serial"
+  fi
+
+  # Mic watchdog + invariant enforcement. If routing can't be satisfied the
+  # devices may be gone (e.g. PipeWire restarted) - rebuild and retry.
+  if alive "$AUDIO_PID"; then
+    if ! route_mic; then
+      ensure_mic
+      route_mic || true
+    fi
+  else
+    log "mic stream died; restarting"
+    start_audio "$serial"
+  fi
+
+  # Camera watchdog + lens watching.
+  lens=$(cat "$LENS_FILE" 2>/dev/null || printf 'front')
+  if [ "$lens" != "$cur_lens" ] || ! alive "$VIDEO_PID"; then
+    stop_video
+    start_video "$serial" "$lens"
+    cur_lens="$lens"
+  fi
+
+  sleep 1
+done

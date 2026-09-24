@@ -1,0 +1,178 @@
+#!/bin/bash
+# TetherCam - one command for everything.
+#
+#   tethercam                    open the control panel
+#   tethercam front|back|auto    switch camera
+#   tethercam start|stop         start/stop streaming
+#   tethercam status             one-line status
+#   tethercam doctor             diagnostics
+#   tethercam pair|forget        wireless ADB pairing
+#   tethercam snapshot [path]    save a frame
+set -uo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tethercam"
+LENS_FILE="$CONF_DIR/lens"
+ENDPOINT_FILE="$CONF_DIR/endpoint"
+SINK=/dev/video42
+SVC=tethercam.service
+DAEMON="$HOME/.local/bin/tethercam-daemon"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+svc_active() { systemctl --user is-active --quiet "$SVC" 2>/dev/null; }
+serial() { adb devices 2>/dev/null | awk '$2=="device"{print $1; exit}'; }
+notify() { have notify-send && notify-send "TetherCam" "$1" 2>/dev/null || true; }
+
+set_lens() {
+  mkdir -p "$CONF_DIR"
+  printf '%s\n' "$1" > "$LENS_FILE"
+  if svc_active; then
+    notify "$2 camera"
+  else
+    systemctl --user start "$SVC" 2>/dev/null || true
+    notify "$2 camera starting"
+  fi
+}
+
+snapshot() {
+  local out="${1:-$HOME/Pictures/tethercam-$(date +%s).jpg}"
+  mkdir -p "$(dirname "$out")"
+  if ffmpeg -y -loglevel error -f v4l2 -i "$SINK" -frames:v 1 "$out" 2>/dev/null; then
+    notify "Snapshot: $out"
+    printf '%s\n' "$out"
+  else
+    printf 'tethercam: no frames - is the phone plugged in?\n' >&2
+    return 1
+  fi
+}
+
+pair() {
+  local s ip ep
+  s=$(adb devices 2>/dev/null | awk '$2=="device" && $1 !~ /:/{print $1; exit}')
+  [ -n "$s" ] || { echo "tethercam: no USB phone found" >&2; return 1; }
+  adb -s "$s" tcpip 5555 >/dev/null 2>&1 || { echo "tethercam: tcpip failed" >&2; return 1; }
+  sleep 3
+  ip=$(adb -s "$s" shell ip route get 1.1.1.1 2>/dev/null | tr -d '\r' | grep -o -E 'src [0-9.]+' | awk '{print $2}')
+  [ -n "$ip" ] || ip=$(adb -s "$s" shell ip addr show wlan0 2>/dev/null | tr -d '\r' | grep -o -E 'inet [0-9.]+' | awk '{print $2}')
+  [ -n "$ip" ] || { echo "tethercam: phone has no WiFi IP" >&2; return 1; }
+  ep="$ip:5555"
+  adb connect "$ep" >/dev/null 2>&1
+  sleep 2
+  adb devices 2>/dev/null | grep "$ep[[:space:]]*device" >/dev/null || { echo "tethercam: connect failed" >&2; return 1; }
+  mkdir -p "$CONF_DIR"
+  printf '%s\n' "$ep" > "$ENDPOINT_FILE"
+  echo "paired: $ep (unplug USB whenever - streaming fails over on its own)"
+}
+
+forget() {
+  rm -f "$ENDPOINT_FILE"
+  adb disconnect >/dev/null 2>&1 || true
+  systemctl --user restart "$SVC" 2>/dev/null || true
+  echo "wireless pairing forgotten"
+}
+
+status() {
+  local st lens ph mic cam
+  st=$(svc_active && echo live || echo off)
+  lens=$(cat "$LENS_FILE" 2>/dev/null || echo front)
+  ph=$(serial)
+  [ -n "$ph" ] || ph="no phone"
+  cam=$([ -e "$SINK" ] && echo "$SINK ready" || echo "$SINK missing")
+  mic=$(pactl list sources short 2>/dev/null | awk '$2=="TetherMic"{print "TetherMic ready"; exit}')
+  [ -n "$mic" ] || mic="TetherMic missing"
+  printf 'tethercam: %s  |  %s  |  %s  |  %s  |  %s\n' "$st" "$lens" "$ph" "$cam" "$mic"
+}
+
+doctor() {
+  local fail=0 def sid want
+  chk() { # chk <label> <ok:0/1> [detail]
+    if [ "$2" = 0 ]; then printf '  ok    %s%s\n' "$1" "${3:+ ($3)}"
+    else printf '  FAIL  %s%s\n' "$1" "${3:+ ($3)}"; fail=1; fi
+  }
+  echo "TetherCam doctor"
+  have adb; chk "adb installed" $?
+  have ffmpeg; chk "ffmpeg installed" $?
+  have pactl; chk "pactl (pipewire-pulse) installed" $?
+  have pw-link; chk "pw-link (pipewire) installed" $?
+  [ -x "$HOME/.local/share/scrcpy-4.1/scrcpy" ]; chk "scrcpy present" $?
+  lsmod 2>/dev/null | grep '^v4l2loopback' >/dev/null; chk "v4l2loopback loaded" $?
+  [ -e "$SINK" ]; chk "$SINK present" $?
+  [ "$(cat /sys/class/video4linux/video42/name 2>/dev/null)" = TetherCam ]; \
+    chk "camera is named TetherCam" $?
+  pactl info 2>/dev/null | grep 'PipeWire' >/dev/null; chk "PipeWire audio server" $?
+
+  if pactl list sources short 2>/dev/null | grep 'TetherMic' >/dev/null; then
+    [ "$(pactl list sources 2>/dev/null | awk '/Name: TetherMic/{f=1} f&&/Description:/{sub(/.*Description: /,""); print; exit}')" = TetherCam ]
+    chk "mic shows as TetherCam" $?
+  else
+    chk "TetherMic source present" 1
+  fi
+  if pactl list sinks short 2>/dev/null | grep 'TetherSink' >/dev/null; then
+    chk "TetherSink present" 0
+  else
+    chk "TetherSink present" 1
+  fi
+
+  # The invariant that broke before: scrcpy's mic must never reach the default sink.
+  sid=$(pactl list sink-inputs 2>/dev/null | awk '
+    /^Sink Input #/ { id=$3 }
+    /node\.name = "scrcpy"/ { gsub(/#/, "", id); found=id }
+    END { if (found) print found }')
+  if [ -n "$sid" ]; then
+    want=$(pactl list short sinks 2>/dev/null | awk '$2=="TetherSink"{print $1; exit}')
+    local cur; cur=$(pactl list short sink-inputs 2>/dev/null | awk -v s="$sid" '$1==s{print $2}')
+    [ "$cur" = "$want" ]; chk "mic routed to TetherSink (not Desktop Audio)" $?
+  else
+    echo "  --    mic stream not running (phone unplugged?)"
+  fi
+
+  svc_active; chk "service active" $?
+  [ "$fail" = 0 ] && echo "all good" || echo "problems found"
+  return "$fail"
+}
+
+ui() {
+  local st lens ph cam on_front on_back on_auto pick
+  st=$(svc_active && echo "live" || echo "off")
+  lens=$(cat "$LENS_FILE" 2>/dev/null || echo front)
+  ph=$(serial); [ -n "$ph" ] || ph="no phone"
+  cam=$([ -e "$SINK" ] && echo "$SINK ready" || echo "$SINK missing")
+  case "$lens" in
+    back) on_front=FALSE; on_back=TRUE; on_auto=FALSE ;;
+    auto) on_front=FALSE; on_back=FALSE; on_auto=TRUE ;;
+    *)    on_front=TRUE;  on_back=FALSE; on_auto=FALSE ;;
+  esac
+  pick=$(zenity --list --radiolist --title="TetherCam" \
+    --text="Status: $st  •  $cam\n$ph\n\nOBS/Discord: pick TetherCam (/dev/video42) and TetherCam mic" \
+    --column="" --column="Action" \
+    $on_front "Use front camera" \
+    $on_back "Use back camera" \
+    $on_auto "Auto (prefers back)" \
+    FALSE "Take test snapshot" \
+    FALSE "Stop" \
+    --width=480 --height=380 --window-icon=camera-web 2>/dev/null) || return 0
+  case "$pick" in
+    "Use front camera") set_lens front Front ;;
+    "Use back camera")  set_lens back Back ;;
+    "Auto"*)            set_lens auto Auto ;;
+    "Take test snapshot") snapshot || notify "No frames - is the phone plugged in?" ;;
+    "Stop") systemctl --user stop "$SVC" 2>/dev/null; notify "Stopped" ;;
+  esac
+}
+
+cmd="${1:-ui}"
+case "$cmd" in
+  ui)        have zenity || { status; exit 0; }; ui ;;
+  front)     set_lens front Front ;;
+  back)      set_lens back Back ;;
+  auto)      set_lens auto Auto ;;
+  start)     systemctl --user start "$SVC" 2>/dev/null; notify "Started" ;;
+  stop)      systemctl --user stop "$SVC" 2>/dev/null; notify "Stopped" ;;
+  status)    status ;;
+  doctor)    doctor ;;
+  pair)      pair ;;
+  forget)    forget ;;
+  snapshot)  shift; snapshot "${1:-}" ;;
+  -h|--help|help)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) echo "tethercam: unknown command '$cmd' (try: tethercam help)" >&2; exit 2 ;;
+esac

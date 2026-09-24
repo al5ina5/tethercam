@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=TetherCam
+Comment=Use any Android as a webcam and microphone
+Exec=tethercam
+Icon=camera-web
+Terminal=false
+Categories=AudioVideo;Video;
+Actions=Front;Back;Stop;
+
+[Desktop Action Front]
+Name=Use front camera
+Exec=tethercam front
+
+[Desktop Action Back]
+Name=Use back camera
+Exec=tethercam back
+
+[Desktop Action Stop]
+Name=Stop
+Exec=tethercam stop

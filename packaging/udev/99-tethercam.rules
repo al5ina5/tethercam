@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="usb", ENV{ID_USB_INTERFACES}=="*:ff4201:*", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}="tethercam.service"

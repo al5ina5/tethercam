@@ -1,0 +1,14 @@
+# build output
+app/ui/node_modules/
+app/ui/dist/
+app/src-tauri/target/
+dist/
+
+# python
+__pycache__/
+*.pyc
+
+# local / editor
+*.bak
+*.log
+.DS_Store
