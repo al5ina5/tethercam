@@ -95,7 +95,7 @@ route_mic() {
 }
 
 start_audio() {
-  local serial="$1" i
+  local serial="$1"
   ensure_mic
   # Clear any stale mic-only scrcpy left by a previous run. Anchored to the
   # scrcpy path so it can never match the shell that invoked us.
@@ -105,7 +105,7 @@ start_audio() {
   AUDIO_PID=$!
   log "mic: scrcpy pid $AUDIO_PID"
   # Route immediately so the default-sink blip is as short as possible.
-  for i in $(seq 1 40); do
+  for _ in $(seq 1 40); do
     route_mic && break
     sleep 0.25
   done

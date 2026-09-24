@@ -5,7 +5,7 @@
 # the default sink, so OBS "Desktop Audio" captured the mic a second time.
 # The invariant: the mic stream lives on TetherSink and never on the default.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 fails=0
 ok()  { printf 'ok   - %s\n' "$1"; }

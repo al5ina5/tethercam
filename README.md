@@ -24,15 +24,30 @@ Mic is always on - no toggle, no beta label.
 Linux with PipeWire (Mint/Ubuntu), `adb`, `ffmpeg`, `zenity`, `v4l2loopback`.
 `install.sh` checks all of this and tells you exactly what is missing.
 
-## Quick start
+## Install
+
+**Linux Mint / Ubuntu - `.deb` (double-click).** Download from
+[Releases](https://github.com/al5ina5/tethercam/releases) and double-click the
+`.deb`, or:
+
+```bash
+sudo apt install ./tethercam_0.1.0_amd64.deb
+```
+
+**One line (from source):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/al5ina5/tethercam/main/packaging/install-online.sh | bash
+```
+
+**From a clone:**
 
 ```bash
 ./install.sh
-# plug in a phone (USB debugging authorized), then:
-tethercam
 ```
 
-Then in OBS: camera `TetherCam`, mic `TetherCam`. Done.
+Then plug in a phone (USB debugging authorized) and run `tethercam`.
+In OBS: camera `TetherCam`, mic `TetherCam`.
 
 ## Commands
 
@@ -44,6 +59,7 @@ tethercam status             one-line status
 tethercam doctor             diagnose anything that looks wrong
 tethercam pair|forget        wireless ADB pairing
 tethercam snapshot [path]    save a frame
+tethercam version            print the version
 ```
 
 ## Wireless (same pipeline)

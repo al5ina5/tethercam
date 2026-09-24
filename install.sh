@@ -18,6 +18,10 @@ need zenity   zenity
 need systemctl systemd
 need pactl    pipewire-pulse
 need pw-link  pipewire
+need curl     curl
+need tar      tar
+need sha256sum coreutils
+need sudo     sudo
 if [ "${#missing[@]}" -gt 0 ]; then
   die "missing packages: ${missing[*]}
   install with: sudo apt install ${missing[*]}"
