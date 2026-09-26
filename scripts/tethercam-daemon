@@ -102,6 +102,15 @@ ensure_mic() {
   pactl load-module module-remap-source master="$MIC_SINK.monitor" source_name="$MIC_SRC" \
     source_properties="device.description='$MIC_LABEL' node.nick='$MIC_SRC'" \
     >/dev/null 2>&1 || true
+  unmute_mic_sink
+}
+
+# A null sink's monitor is tapped *after* the sink's mute/volume stage, so a
+# muted or zeroed TetherSink silently starves the remap source - the mic goes
+# dead while every device still looks present. Re-assert it every loop.
+unmute_mic_sink() {
+  pactl set-sink-mute "$MIC_SINK" 0 >/dev/null 2>&1 || true
+  pactl set-sink-volume "$MIC_SINK" 100% >/dev/null 2>&1 || true
 }
 
 sink_index() { pactl list short sinks 2>/dev/null | awk -v n="$1" '$2==n{print $1; exit}'; }
@@ -246,6 +255,7 @@ while :; do
   # Mic watchdog + invariant enforcement. If routing can't be satisfied the
   # devices may be gone (e.g. PipeWire restarted) - rebuild and retry.
   if alive "$AUDIO_PID"; then
+    unmute_mic_sink
     if ! route_mic; then
       ensure_mic
       route_mic || true

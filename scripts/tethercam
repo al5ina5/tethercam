@@ -15,7 +15,7 @@ LENS_FILE="$CONF_DIR/lens"
 ENDPOINT_FILE="$CONF_DIR/endpoint"
 SINK=/dev/video42
 SVC=tethercam.service
-VERSION=0.1.1
+VERSION=0.1.2
 
 have() { command -v "$1" >/dev/null 2>&1; }
 svc_active() { systemctl --user is-active --quiet "$SVC" 2>/dev/null; }
@@ -108,6 +108,11 @@ doctor() {
   fi
   if pactl list sinks short 2>/dev/null | grep 'TetherSink' >/dev/null; then
     chk "TetherSink present" 0
+    # Its monitor is post-volume, so mute/0% would silently kill the mic.
+    pactl get-sink-mute TetherSink 2>/dev/null | grep -q 'Mute: no'
+    chk "TetherSink not muted" $?
+    pactl get-sink-volume TetherSink 2>/dev/null | grep -qE '/ *[1-9][0-9]*%'
+    chk "TetherSink volume non-zero" $?
   else
     chk "TetherSink present" 1
   fi

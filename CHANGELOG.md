@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 - 2026-09-26
+
+- Fix: the microphone could go permanently silent if `TetherSink` was muted
+  or set to 0% volume - a null sink's monitor is tapped *after* its volume
+  stage, so the phone mic went dead while every device still looked present.
+  The daemon now re-asserts `TetherSink` unmuted + 100% every loop, and
+  `tethercam doctor` flags a muted or zeroed sink.
+
 ## 0.1.1 - 2026-09-23
 
 - Fix: the `.deb` now downloads scrcpy on first run. In 0.1.0 a package-only
